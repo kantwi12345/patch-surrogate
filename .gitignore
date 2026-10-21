@@ -1,0 +1,7 @@
+﻿.venv/
+data/*.parquet
+data/*.npy
+data/*.png
+__pycache__/
+*.pyc
+.idea/
