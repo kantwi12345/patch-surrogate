@@ -7,7 +7,7 @@ from src.models.surrogate import PatchSurrogate
 
 
 def load_model(checkpoint_path="checkpoints/surrogate_best.pt"):
-    ckpt = torch.load(checkpoint_path, map_location="cpu")
+    ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     model = PatchSurrogate(
         input_dim=5,
         output_dim=ckpt["n_freq_points"] * 2,
