@@ -2,14 +2,15 @@
 M4 — Real HFSS simulation via pyaedt, built incrementally.
 
 STAGE 1: geometry only (substrate, ground, inset-fed patch) - DONE, verified.
-STAGE 2: add lumped port at the feed line's board-edge face.
+STAGE 2: lumped port at feed line board edge - DONE, verified.
+STAGE 3: airbox + radiation boundary.
 """
 
 import numpy as np
 from pyaedt import Hfss
 
-
 from src.sim.schema import DesignParams
+from src.sim.analytical_model import _resonant_frequency
 
 C0 = 299_792_458.0
 
@@ -32,7 +33,7 @@ def _feed_line_width(h, eps_r, z0=50.0):
     return w_over_h * h
 
 
-def build_geometry(design: DesignParams, non_graphical=False, create_port=True):
+def build_geometry(design: DesignParams, non_graphical=False, create_port=True, create_airbox=True):
     L, W, h, eps_r, y0 = design.L, design.W, design.h, design.eps_r, design.y0
 
     wf = _feed_line_width(h, eps_r, z0=50.0)
@@ -137,8 +138,33 @@ def build_geometry(design: DesignParams, non_graphical=False, create_port=True):
             reference_object_list=["ground"],
         )
         print("Lumped port 'P1' created on port_cap sheet (integration line ground -> feed trace).")
-        
-    print("AEDT GUI should now show: ground, substrate, inset-fed patch, feed line, and a port sheet at the board edge.")
+
+    if create_airbox:
+        fr_est, _ = _resonant_frequency(L, W, h, eps_r)
+        lambda_est = C0 / fr_est
+        pad = lambda_est / 4
+
+        air_x0 = -sub_L / 2 - pad
+        air_y0 = -sub_W / 2 - pad
+        air_z0 = -pad * 0.1  # small padding below ground too, box must enclose ground plane
+        air_L = sub_L + 2 * pad
+        air_W = sub_W + 2 * pad
+        air_H = h + pad + pad * 0.1  # from just below ground to pad above the patch
+
+        airbox = hfss.modeler.create_box(
+            position=[air_x0, air_y0, air_z0],
+            dimensions_list=[air_L, air_W, air_H],
+            name="airbox",
+            matname="vacuum",
+        )
+        hfss.assign_radiation_boundary_to_objects("airbox")
+
+        print(f"Airbox created: {air_L*1e3:.1f} x {air_W*1e3:.1f} x {air_H*1e3:.1f} mm "
+              f"(pad = lambda/4 at fr_est={fr_est/1e9:.3f} GHz = {pad*1e3:.2f} mm)")
+        print("Radiation boundary assigned to airbox outer faces.")
+
+    print("AEDT GUI should now show: ground, substrate, inset-fed patch, feed line, port sheet, "
+          "and a large surrounding airbox (radiation boundary, usually shown semi-transparent/wireframe).")
 
     return hfss
 
@@ -148,6 +174,6 @@ if __name__ == "__main__":
     test_design = DesignParams(
         L=0.02940, W=0.03800, h=0.0016, eps_r=4.40, y0=0.01090,
     )
-    hfss = build_geometry(test_design, non_graphical=False, create_port=True)
+    hfss = build_geometry(test_design, non_graphical=False, create_port=True, create_airbox=True)
     input("Press Enter to close AEDT...")
     hfss.release_desktop(close_projects=True, close_desktop=True)
