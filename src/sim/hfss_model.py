@@ -1,13 +1,13 @@
 """
 M4 — Real HFSS simulation via pyaedt, built incrementally.
 
-STAGE 1: geometry only (substrate, ground, inset-fed patch). Run this with
-the AEDT GUI visible and visually confirm the model looks like a correct
-inset-fed microstrip patch antenna before adding port/airbox/setup/solve.
+STAGE 1: geometry only (substrate, ground, inset-fed patch) - DONE, verified.
+STAGE 2: add lumped port at the feed line's board-edge face.
 """
 
 import numpy as np
 from pyaedt import Hfss
+
 
 from src.sim.schema import DesignParams
 
@@ -32,7 +32,7 @@ def _feed_line_width(h, eps_r, z0=50.0):
     return w_over_h * h
 
 
-def build_geometry(design: DesignParams, non_graphical=False):
+def build_geometry(design: DesignParams, non_graphical=False, create_port=True):
     L, W, h, eps_r, y0 = design.L, design.W, design.h, design.eps_r, design.y0
 
     wf = _feed_line_width(h, eps_r, z0=50.0)
@@ -119,7 +119,26 @@ def build_geometry(design: DesignParams, non_graphical=False):
 
     print(f"Geometry built. Feed line width wf = {wf*1e3:.3f} mm, feed_length = {feed_length*1e3:.2f} mm")
     print(f"Substrate footprint: {sub_L*1e3:.2f} x {sub_W*1e3:.2f} mm")
-    print("AEDT GUI should now show: ground plane, substrate block, and an inset-fed patch with a feed line.")
+
+    if create_port:
+        # vertical sheet at the board edge, from ground (z=0) to feed trace (z=h)
+        port_sheet = hfss.modeler.create_rectangle(
+            csPlane="YZ",
+            position=[feed_x0, -wf / 2, 0],
+            dimension_list=[wf, h],
+            name="port_cap",
+        )
+        integration_line = [[feed_x0, 0, 0], [feed_x0, 0, h]]
+        hfss.create_lumped_port_to_sheet(
+            port_sheet.name,
+            axisdir=integration_line,
+            impedance=50,
+            portname="P1",
+            reference_object_list=["ground"],
+        )
+        print("Lumped port 'P1' created on port_cap sheet (integration line ground -> feed trace).")
+        
+    print("AEDT GUI should now show: ground, substrate, inset-fed patch, feed line, and a port sheet at the board edge.")
 
     return hfss
 
@@ -129,6 +148,6 @@ if __name__ == "__main__":
     test_design = DesignParams(
         L=0.02940, W=0.03800, h=0.0016, eps_r=4.40, y0=0.01090,
     )
-    hfss = build_geometry(test_design, non_graphical=False)
+    hfss = build_geometry(test_design, non_graphical=False, create_port=True)
     input("Press Enter to close AEDT...")
     hfss.release_desktop(close_projects=True, close_desktop=True)
