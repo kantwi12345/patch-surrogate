@@ -4,7 +4,8 @@ from pathlib import Path
 from tqdm import tqdm
 
 from src.sim.sampler import sample_designs
-from src.sim.analytical_model import simulate
+from src.sim.analytical_model import simulate, extract_parametric_targets
+
 
 FREQ_GRID_HZ = np.linspace(0.5e9, 8e9, 301)
 
@@ -20,6 +21,7 @@ def build(n_samples=5000, out_path="data/synthetic_dataset.parquet", seed=42):
             continue
         try:
             result = simulate(d, FREQ_GRID_HZ)
+            params = extract_parametric_targets(result, FREQ_GRID_HZ)
         except Exception:
             n_skipped += 1
             continue
@@ -32,6 +34,11 @@ def build(n_samples=5000, out_path="data/synthetic_dataset.parquet", seed=42):
             "peak_gain_dbi": result.peak_gain_dbi,
             "s11_db": result.s11_db.tolist(),
             "gain_dbi": result.gain_dbi.tolist(),
+            "fr_hz": params["fr_hz"],
+            "Q": params["Q"],
+            "Rin_matched": params["Rin_matched"],
+            "gain_at_res_dbi": params["gain_at_res_dbi"],
+            "gain_rolloff": params["gain_rolloff"],
         })
 
     df = pd.DataFrame(records)
