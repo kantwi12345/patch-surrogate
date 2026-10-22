@@ -11,7 +11,7 @@ PARAM_COLS = ["fr_hz", "Q", "Rin_matched", "gain_at_res_dbi"]
 class PatchParamDataset(Dataset):
     """
     Input (X): normalized geometry [L, W, h, eps_r, y0]
-    Output (Y): normalized physical params [fr_hz, Q, Rin_matched, gain_at_res_dbi, gain_rolloff]
+    Output (Y): normalized physical params [fr_hz, Q, Rin_matched, gain_at_res_dbi]
     Applies log-transform to fr_hz, Q, Rin_matched before z-scoring (all positive, skewed).
     """
 
@@ -24,7 +24,7 @@ class PatchParamDataset(Dataset):
         transformed[:, 0] = np.log10(raw[:, 0])        # fr_hz
         transformed[:, 1] = np.log10(raw[:, 1])        # Q
         transformed[:, 2] = np.log10(raw[:, 2])        # Rin_matched
-        # gain_at_res_dbi (idx 3) and gain_rolloff (idx 4) left as-is
+        # gain_at_res_dbi (idx 3) left as-is
 
         if x_stats is None:
             x_mean = X.mean(axis=0)
@@ -71,7 +71,6 @@ def denormalize_params(y_norm: np.ndarray, y_mean: np.ndarray, y_std: np.ndarray
     Q = 10 ** raw[..., 1]
     Rin = 10 ** raw[..., 2]
     gain_at_res = raw[..., 3]
-    gain_rolloff = raw[..., 4]
     return {
         "fr_hz": fr_hz, "Q": Q, "Rin_matched": Rin,
         "gain_at_res_dbi": gain_at_res,
