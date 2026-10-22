@@ -5,3 +5,4 @@ data/*.png
 __pycache__/
 *.pyc
 .idea/
+checkpoints/
