@@ -38,7 +38,6 @@ def build(n_samples=5000, out_path="data/synthetic_dataset.parquet", seed=42):
             "Q": params["Q"],
             "Rin_matched": params["Rin_matched"],
             "gain_at_res_dbi": params["gain_at_res_dbi"],
-            "gain_rolloff": params["gain_rolloff"],
         })
 
     df = pd.DataFrame(records)
