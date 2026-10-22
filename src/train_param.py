@@ -25,7 +25,7 @@ def train_param(
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
 
     model = PatchSurrogate(
-        input_dim=5, output_dim=5,
+        input_dim=5, output_dim=4,
         hidden_dim=hidden_dim, n_hidden_layers=n_hidden_layers,
     ).to(device)
 

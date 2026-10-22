@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 from sklearn.model_selection import train_test_split
 
 
-PARAM_COLS = ["fr_hz", "Q", "Rin_matched", "gain_at_res_dbi", "gain_rolloff"]
+PARAM_COLS = ["fr_hz", "Q", "Rin_matched", "gain_at_res_dbi"]
 
 
 class PatchParamDataset(Dataset):
@@ -74,5 +74,5 @@ def denormalize_params(y_norm: np.ndarray, y_mean: np.ndarray, y_std: np.ndarray
     gain_rolloff = raw[..., 4]
     return {
         "fr_hz": fr_hz, "Q": Q, "Rin_matched": Rin,
-        "gain_at_res_dbi": gain_at_res, "gain_rolloff": gain_rolloff,
+        "gain_at_res_dbi": gain_at_res,
     }

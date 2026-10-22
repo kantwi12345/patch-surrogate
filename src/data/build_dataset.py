@@ -4,7 +4,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 from src.sim.sampler import sample_designs
-from src.sim.analytical_model import simulate, extract_parametric_targets
+from src.sim.analytical_model import simulate, compute_resonance_params
 
 
 FREQ_GRID_HZ = np.linspace(0.5e9, 8e9, 301)
@@ -21,7 +21,7 @@ def build(n_samples=5000, out_path="data/synthetic_dataset.parquet", seed=42):
             continue
         try:
             result = simulate(d, FREQ_GRID_HZ)
-            params = extract_parametric_targets(result, FREQ_GRID_HZ)
+            params = compute_resonance_params(d)
         except Exception:
             n_skipped += 1
             continue

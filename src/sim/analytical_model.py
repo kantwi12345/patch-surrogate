@@ -124,63 +124,57 @@ def simulate(design: DesignParams, freq_hz: np.ndarray) -> SimResult:
         min_s11_db=min_s11_db,
         peak_gain_dbi=float(np.max(gain_dbi)),
     )
-def extract_parametric_targets(result: SimResult, freq_hz: np.ndarray) -> dict:
+def compute_resonance_params(design: DesignParams) -> dict:
     """
-    Extract compact physical parameters from a full SimResult curve,
-    used as regression targets for the parametric surrogate (M2.5).
+    Compute compact physical parameters DIRECTLY from geometry, using the
+    exact same sub-formulas as simulate(). This guarantees reconstruct_curves()
+    reproduces simulate()'s curves almost exactly -- no noisy re-extraction
+    from an already-generated curve.
     """
-    s11 = result.s11_db
-    gain = result.gain_dbi
+    L, W, h, eps_r, y0 = design.L, design.W, design.h, design.eps_r, design.y0
 
-    res_idx = int(np.argmin(s11))
-    fr = float(freq_hz[res_idx])
-    min_s11 = float(s11[res_idx])
+    fr, eps_reff = _resonant_frequency(L, W, h, eps_r)
+    lambda_r = C0 / fr
+    k0_r = 2 * np.pi / lambda_r
 
-    # Estimate Q from -3dB (half-power, relative to dip depth) bandwidth around resonance
-    dip_depth = -min_s11  # positive number, dB below 0
-    half_power_db_threshold = min_s11 + dip_depth * (1 - 10 ** (-3 / 10))  # approx -3dB-from-dip level
-    below = s11 <= half_power_db_threshold
-    if np.any(below):
-        idx = np.where(below)[0]
-        f_lo, f_hi = freq_hz[idx[0]], freq_hz[idx[-1]]
-        bw_3db = max(f_hi - f_lo, 1e3)
-    else:
-        bw_3db = 0.05 * fr  # fallback heuristic
-    Q = fr / bw_3db
+    G1 = max(_slot_conductance_G1(W, k0_r), 1e-9)
+    G12 = _mutual_conductance_G12(W, L, k0_r)
+    Rin0 = 1.0 / (2.0 * (G1 + G12))
+    Rin = max(Rin0 * np.cos(np.pi * y0 / L) ** 2, 1.0)
 
-    # Approximate matched input resistance from the mismatch depth at resonance
-    gamma_mag = 10 ** (min_s11 / 20.0)
-    Z0 = 50.0
-    # Zin = Z0 * (1+gamma)/(1-gamma), assume real/positive near resonance
-    Rin = Z0 * (1 + gamma_mag) / (1 - gamma_mag + 1e-9)
+    bw_frac = 3.77 * ((eps_r - 1) / eps_r ** 2) * (h / lambda_r) * (W / L)
+    bw_frac = float(np.clip(bw_frac, 0.003, 0.25))
+    Q = 1.0 / bw_frac
 
-    gain_at_res = float(gain[res_idx])
+    aspect = W / L
+    D0_dbi = 6.5 + 1.5 * np.log10(np.clip(aspect, 0.5, 3.0))
+    D0_dbi = float(np.clip(D0_dbi, 4.0, 9.0))
+    eff = 1.0 - 0.03 * (eps_r - 1) - 12.0 * (h / lambda_r)
+    eff = float(np.clip(eff, 0.3, 0.98))
+    gain_premismatch = D0_dbi + 10 * np.log10(eff)
 
-    # Rolloff: slope of gain drop moving away from resonance (simple linear fit in log-freq)
-    span = max(len(freq_hz) // 8, 3)
-    lo_idx = max(res_idx - span, 0)
-    hi_idx = min(res_idx + span, len(freq_hz) - 1)
-    gain_rolloff = float((gain[hi_idx] - gain[lo_idx]) / (freq_hz[hi_idx] - freq_hz[lo_idx] + 1e-9))
+    # At exact resonance, parallel RLC reactance cancels -> Zin(fr) = Rin exactly
+    gamma_at_res = (Rin - Z0_FEED) / (Rin + Z0_FEED)
+    mismatch_at_res = max(1 - gamma_at_res ** 2, 1e-6)
+    gain_at_res_dbi = gain_premismatch + 10 * np.log10(mismatch_at_res)
 
     return {
-        "fr_hz": fr,
+        "fr_hz": float(fr),
         "Q": float(np.clip(Q, 1.0, 500.0)),
-        "Rin_matched": float(np.clip(Rin, 1.0, 1000.0)),
-        "gain_at_res_dbi": gain_at_res,
-        "gain_rolloff": gain_rolloff,
+        "Rin_matched": float(np.clip(Rin, 1.0, 2000.0)),
+        "gain_at_res_dbi": float(gain_at_res_dbi),
     }
+
 
 def reconstruct_curves(params: dict, freq_hz: np.ndarray) -> tuple:
     """
-    Reconstruct S11(f) and gain(f) curves from compact parametric targets.
-    Mirrors the RLC resonator logic used in simulate(), but driven by
-    network-predicted scalars instead of full geometry.
+    Reconstruct S11(f) and gain(f) from compact params, using the exact
+    same mismatch-coupling formula as simulate() (not a linear approximation).
     """
     fr = params["fr_hz"]
     Q = params["Q"]
     Rin = params["Rin_matched"]
-    gain_at_res = params["gain_at_res_dbi"]
-    rolloff = params["gain_rolloff"]
+    gain_at_res_dbi = params["gain_at_res_dbi"]
 
     omega0 = 2 * np.pi * fr
     Cres = Q / (omega0 * Rin)
@@ -193,9 +187,10 @@ def reconstruct_curves(params: dict, freq_hz: np.ndarray) -> tuple:
     gamma = (Zin - Z0_FEED) / (Zin + Z0_FEED)
     s11_db = 20 * np.log10(np.clip(np.abs(gamma), 1e-6, None))
 
-    gain_dbi = gain_at_res + rolloff * (freq_hz - fr)
     mismatch_lin = np.clip(1 - np.abs(gamma) ** 2, 1e-6, 1.0)
-    mismatch_at_res = np.clip(1 - np.abs(gamma[np.argmin(np.abs(freq_hz - fr))]) ** 2, 1e-6, 1.0)
-    gain_dbi = gain_dbi + 10 * np.log10(mismatch_lin) - 10 * np.log10(mismatch_at_res)
+    gamma_at_res = (Rin - Z0_FEED) / (Rin + Z0_FEED)
+    mismatch_at_res = max(1 - gamma_at_res ** 2, 1e-6)
+
+    gain_dbi = gain_at_res_dbi + 10 * np.log10(mismatch_lin) - 10 * np.log10(mismatch_at_res)
 
     return s11_db, gain_dbi
