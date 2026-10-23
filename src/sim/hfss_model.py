@@ -133,7 +133,7 @@ def build_geometry(design: DesignParams, non_graphical=False, create_port=True, 
     return hfss, fr_est
 
 
-dedef setup_and_solve(hfss, fr_est, sweep_frac=0.15, n_points=81, setup_name="Setup1", sweep_name="Sweep1"):
+def setup_and_solve(hfss, fr_est, sweep_frac=0.15, n_points=81, setup_name="Setup1", sweep_name="Sweep1"):
     """
     Create a driven-modal analysis setup centered on fr_est, add a discrete
     frequency sweep spanning +/- sweep_frac around fr_est, and solve.
@@ -200,6 +200,33 @@ def extract_zin(hfss, setup_name="Setup1", sweep_name="Sweep1", z0=50.0):
     freq_hz = freq_ghz * 1e9
     return freq_hz, zin.real, zin.imag
 
+def add_farfield_sphere(hfss, name="Boresight"):
+    """
+    Create an infinite sphere at boresight (theta=0, phi=0), which for this
+    geometry (patch in XY plane, radiating +Z) is the main lobe direction.
+    """
+    hfss.insert_infinite_sphere(
+        x_start=0, x_stop=0, x_step=1,
+        y_start=0, y_stop=0, y_step=1,
+        name=name,
+    )
+    print(f"Infinite sphere '{name}' created at boresight (theta=0, phi=0).")
+    return name
+
+
+def extract_gain(hfss, setup_name="Setup1", sweep_name="Sweep1", sphere_name="Boresight", expression="RealizedGainTotal"):
+    """Pull realized gain (dBi) at boresight vs frequency from the far-field solution."""
+    solution = hfss.post.get_far_field_data(
+        expression=expression,
+        setup_sweep_name=f"{setup_name} : {sweep_name}",
+        domain=sphere_name,
+        families_dict={"Theta": ["0"], "Phi": ["0"], "Freq": ["All"]},
+    )
+    freq_ghz = np.array(solution.primary_sweep_values, dtype=float)
+    gain_db = np.array(solution.data_real(), dtype=float)
+    freq_hz = freq_ghz * 1e9
+    return freq_hz, gain_db
+
 
 if __name__ == "__main__":
     test_design = DesignParams(
@@ -207,7 +234,8 @@ if __name__ == "__main__":
     )
     hfss, fr_est = build_geometry(test_design, non_graphical=False, create_port=True, create_airbox=True,
                                   use_inset=True)
-    setup_and_solve(hfss, fr_est,)
+    add_farfield_sphere(hfss)
+    setup_and_solve(hfss, fr_est)
 
 
     freq_hz, s11_db = extract_s11(hfss)
@@ -223,6 +251,13 @@ if __name__ == "__main__":
         print("Full Zin curve (GHz, Re(Zin) ohm, Im(Zin) ohm):")
         for f, r, im in zip(freq_hz_z, re_zin, im_zin):
             print(f"  {f / 1e9:.3f}  {r:.2f}  {im:.2f}")
+            freq_hz_g, gain_db = extract_gain(hfss)
+            print(f"\n=== HFSS Gain results (boresight) ===")
+            peak_idx = np.argmax(gain_db)
+            print(f"Peak realized gain: {gain_db[peak_idx]:.2f} dBi at {freq_hz_g[peak_idx] / 1e9:.3f} GHz")
+            print("Full gain curve (GHz, dBi):")
+            for f, g in zip(freq_hz_g, gain_db):
+                print(f"  {f / 1e9:.3f}  {g:.2f}")
 
     input("Press Enter to close AEDT...")
     hfss.release_desktop(close_projects=True, close_desktop=True)
