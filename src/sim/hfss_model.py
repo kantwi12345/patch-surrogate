@@ -10,7 +10,7 @@ STAGE 4: setup + frequency sweep + solve.
 import numpy as np
 from pyaedt import Hfss
 
-from src.sim.schema import DesignParams
+from src.sim.schema import DesignParams, SimResult
 from src.sim.analytical_model import _resonant_frequency
 
 C0 = 299_792_458.0
@@ -133,13 +133,15 @@ def build_geometry(design: DesignParams, non_graphical=False, create_port=True, 
     return hfss, fr_est
 
 
-def setup_and_solve(hfss, fr_est, sweep_frac=0.15, n_points=81, setup_name="Setup1", sweep_name="Sweep1"):
-    """
-    Create a driven-modal analysis setup centered on fr_est, add a discrete
-    frequency sweep spanning +/- sweep_frac around fr_est, and solve.
-    """
-    f_lo = fr_est * (1 - sweep_frac)
-    f_hi = fr_est * (1 + sweep_frac)
+def setup_and_solve(hfss, fr_est, sweep_frac=0.15, n_points=81,
+                     freq_start_hz=None, freq_stop_hz=None,
+                     setup_name="Setup1", sweep_name="Sweep1"):
+    if freq_start_hz is not None and freq_stop_hz is not None:
+        f_lo = freq_start_hz
+        f_hi = freq_stop_hz
+    else:
+        f_lo = fr_est * (1 - sweep_frac)
+        f_hi = fr_est * (1 + sweep_frac)
 
     setup = hfss.create_setup(setupname=setup_name)
     setup.props["Frequency"] = f"{fr_est/1e9}GHz"
@@ -149,20 +151,13 @@ def setup_and_solve(hfss, fr_est, sweep_frac=0.15, n_points=81, setup_name="Setu
     setup.update()
 
     hfss.create_linear_count_sweep(
-        setupname=setup_name,
-        unit="GHz",
-        freqstart=f_lo / 1e9,
-        freqstop=f_hi / 1e9,
-        num_of_freq_points=n_points,
-        sweepname=sweep_name,
-        sweep_type="Discrete",
-        save_fields=True,
+        setupname=setup_name, unit="GHz",
+        freqstart=f_lo / 1e9, freqstop=f_hi / 1e9,
+        num_of_freq_points=n_points, sweepname=sweep_name,
+        sweep_type="Discrete", save_fields=True,
     )
-
-    print(f"Setup '{setup_name}' created: adaptive freq {fr_est/1e9:.3f} GHz, "
-          f"max 10 passes, MaxDeltaS 0.02.")
+    print(f"Setup '{setup_name}' created: adaptive freq {fr_est/1e9:.3f} GHz, max 10 passes, MaxDeltaS 0.02.")
     print(f"Sweep '{sweep_name}': {f_lo/1e9:.3f}-{f_hi/1e9:.3f} GHz, {n_points} points, discrete, fields saved.")
-
     print("Starting analysis (this may take a few minutes)...")
     hfss.analyze_setup(setup_name)
     print("Analysis complete.")
@@ -226,6 +221,49 @@ def extract_gain(hfss, setup_name="Setup1", sweep_name="Sweep1", sphere_name="Bo
     gain_db = np.array(solution.data_real(), dtype=float)
     freq_hz = freq_ghz * 1e9
     return freq_hz, gain_db
+def simulate_hfss(design: DesignParams, freq_hz: np.ndarray, non_graphical=True, n_points=81) -> SimResult:
+
+
+    f_lo = float(np.min(freq_hz)) * 0.95
+    f_hi = float(np.max(freq_hz)) * 1.05
+
+    hfss, fr_est = build_geometry(
+        design, non_graphical=non_graphical,
+        create_port=True, create_airbox=True, use_inset=True,
+    )
+    try:
+        add_farfield_sphere(hfss)
+        setup_and_solve(hfss, fr_est, freq_start_hz=f_lo, freq_stop_hz=f_hi, n_points=n_points)
+
+        hfss_freq_hz, s11_db_raw = extract_s11(hfss)
+        _, gain_db_raw = extract_gain(hfss)
+
+        min_idx = int(np.argmin(s11_db_raw))
+        resonant_freq_hz = float(hfss_freq_hz[min_idx])
+        min_s11_db = float(s11_db_raw[min_idx])
+        peak_gain_dbi = float(np.max(gain_db_raw))
+
+        below_10 = s11_db_raw <= -10.0
+        if np.any(below_10):
+            idx = np.where(below_10)[0]
+            bandwidth_hz = float(hfss_freq_hz[idx[-1]] - hfss_freq_hz[idx[0]])
+        else:
+            bandwidth_hz = 0.0
+
+        s11_db = np.interp(freq_hz, hfss_freq_hz, s11_db_raw)
+        gain_dbi = np.interp(freq_hz, hfss_freq_hz, gain_db_raw)
+
+        return SimResult(
+            freq_hz=freq_hz,
+            s11_db=s11_db,
+            gain_dbi=gain_dbi,
+            resonant_freq_hz=resonant_freq_hz,
+            bandwidth_hz=bandwidth_hz,
+            min_s11_db=min_s11_db,
+            peak_gain_dbi=peak_gain_dbi,
+        )
+    finally:
+        hfss.release_desktop(close_projects=True, close_desktop=True)
 
 
 if __name__ == "__main__":
