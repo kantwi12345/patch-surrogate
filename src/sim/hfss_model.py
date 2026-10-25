@@ -221,9 +221,62 @@ def extract_gain(hfss, setup_name="Setup1", sweep_name="Sweep1", sphere_name="Bo
     gain_db = np.array(solution.data_real(), dtype=float)
     freq_hz = freq_ghz * 1e9
     return freq_hz, gain_db
+
+
+def _find_resonance(freq_hz, s11_db, fr_est_hz=None):
+    """
+    Robustly locate the TRUE cavity resonance in an S11(freq) sweep.
+
+    A naive global argmin(S11) fails for badly-mismatched designs: broadband
+    feed/port discontinuity reflection can monotonically worsen S11 toward a
+    sweep edge, producing a deeper value there than the real (but shallow)
+    cavity resonance dip -- a pure sweep-boundary artifact, not a physical
+    resonance. This function instead finds genuine INTERIOR local minima
+    (points lower than both neighbors) and picks the one closest to the
+    analytical cavity-mode estimate fr_est_hz, which depends only on
+    L, W, h, eps_r (NOT on feed position/matching), so it remains a valid
+    physical prior for where the resonance should be even when the match
+    quality itself is badly wrong.
+
+    Returns (resonant_freq_hz, min_s11_db, bandwidth_hz, res_idx).
+    """
+    s11 = np.asarray(s11_db)
+    freq = np.asarray(freq_hz)
+    n = len(s11)
+
+    local_min_idx = [
+        i for i in range(1, n - 1)
+        if s11[i] < s11[i - 1] and s11[i] < s11[i + 1]
+    ]
+
+    if local_min_idx:
+        if fr_est_hz is not None:
+            res_idx = min(local_min_idx, key=lambda i: abs(freq[i] - fr_est_hz))
+        else:
+            res_idx = min(local_min_idx, key=lambda i: s11[i])
+    else:
+        res_idx = int(np.argmin(s11))
+        print("WARNING: _find_resonance found NO interior local minimum in "
+              "the S11(f) sweep -- falling back to global argmin, which may "
+              "be a sweep-edge artifact, not a true resonance.")
+
+    resonant_freq_hz = float(freq[res_idx])
+    min_s11_db = float(s11[res_idx])
+
+    if min_s11_db <= -10.0:
+        lo, hi = res_idx, res_idx
+        while lo > 0 and s11[lo - 1] <= -10.0:
+            lo -= 1
+        while hi < n - 1 and s11[hi + 1] <= -10.0:
+            hi += 1
+        bandwidth_hz = float(freq[hi] - freq[lo])
+    else:
+        bandwidth_hz = 0.0
+
+    return resonant_freq_hz, min_s11_db, bandwidth_hz, res_idx
+
+
 def simulate_hfss(design: DesignParams, freq_hz: np.ndarray, non_graphical=True, n_points=81) -> SimResult:
-
-
     f_lo = float(np.min(freq_hz)) * 0.95
     f_hi = float(np.max(freq_hz)) * 1.05
 
@@ -236,22 +289,19 @@ def simulate_hfss(design: DesignParams, freq_hz: np.ndarray, non_graphical=True,
         setup_and_solve(hfss, fr_est, freq_start_hz=f_lo, freq_stop_hz=f_hi, n_points=n_points)
 
         hfss_freq_hz, s11_db_raw = extract_s11(hfss)
-        _, gain_db_raw = extract_gain(hfss)
+        hfss_freq_hz_g, gain_db_raw = extract_gain(hfss)
 
-        min_idx = int(np.argmin(s11_db_raw))
-        resonant_freq_hz = float(hfss_freq_hz[min_idx])
-        min_s11_db = float(s11_db_raw[min_idx])
-        peak_gain_dbi = float(np.max(gain_db_raw))
+        # Align gain curve onto the S11 frequency grid (should already match,
+        # but interpolate defensively in case grids differ slightly).
+        gain_db_aligned = np.interp(hfss_freq_hz, hfss_freq_hz_g, gain_db_raw)
 
-        below_10 = s11_db_raw <= -10.0
-        if np.any(below_10):
-            idx = np.where(below_10)[0]
-            bandwidth_hz = float(hfss_freq_hz[idx[-1]] - hfss_freq_hz[idx[0]])
-        else:
-            bandwidth_hz = 0.0
+        resonant_freq_hz, min_s11_db, bandwidth_hz, res_idx = _find_resonance(
+            hfss_freq_hz, s11_db_raw, fr_est_hz=fr_est,
+        )
+        peak_gain_dbi = float(gain_db_aligned[res_idx])
 
         s11_db = np.interp(freq_hz, hfss_freq_hz, s11_db_raw)
-        gain_dbi = np.interp(freq_hz, hfss_freq_hz, gain_db_raw)
+        gain_dbi = np.interp(freq_hz, hfss_freq_hz, gain_db_aligned)
 
         return SimResult(
             freq_hz=freq_hz,
