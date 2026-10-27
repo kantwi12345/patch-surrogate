@@ -6,18 +6,18 @@
       "W": 0.076,
       "h": 0.0016,
       "eps_r": 4.4,
-      "y0": 0.022
+      "y0": 0.0159
     },
     "analytical": {
       "resonant_freq_hz": 1200537671.2200105,
-      "min_s11_db": -21.722447397841247,
-      "peak_gain_dbi": 5.776355226309276,
+      "min_s11_db": -6.318249327377058,
+      "peak_gain_dbi": 4.651126609147929,
       "bandwidth_hz": 0.0
     },
     "hfss": {
-      "resonant_freq_hz": 1122000000.0,
-      "min_s11_db": -4.861735478321262,
-      "peak_gain_dbi": 1.9396516997124842,
+      "resonant_freq_hz": 1152000000.0,
+      "min_s11_db": -11.09499178915571,
+      "peak_gain_dbi": 2.630871316058881,
       "bandwidth_hz": 0.0
     }
   },
@@ -28,18 +28,18 @@
       "W": 0.0507,
       "h": 0.0016,
       "eps_r": 4.4,
-      "y0": 0.0146
+      "y0": 0.0105
     },
     "analytical": {
       "resonant_freq_hz": 1800286888.4550986,
-      "min_s11_db": -34.11021916864947,
-      "peak_gain_dbi": 5.598545391153326,
+      "min_s11_db": -6.280123641517629,
+      "peak_gain_dbi": 4.434016336703048,
       "bandwidth_hz": 0.0
     },
     "hfss": {
-      "resonant_freq_hz": 1694250000.0,
-      "min_s11_db": -3.738919720118055,
-      "peak_gain_dbi": 1.7159421595053062,
+      "resonant_freq_hz": 1773000000.0,
+      "min_s11_db": -23.914625492829018,
+      "peak_gain_dbi": 3.2588631917512325,
       "bandwidth_hz": 0.0
     }
   },
@@ -50,19 +50,19 @@
       "W": 0.038,
       "h": 0.0016,
       "eps_r": 4.4,
-      "y0": 0.0109
+      "y0": 0.0079
     },
     "analytical": {
       "resonant_freq_hz": 2401696704.7094555,
-      "min_s11_db": -23.845216572154584,
-      "peak_gain_dbi": 5.366009571989774,
+      "min_s11_db": -6.38470694168659,
+      "peak_gain_dbi": 4.24946361125455,
       "bandwidth_hz": 0.0
     },
     "hfss": {
-      "resonant_freq_hz": 2304000000.0,
-      "min_s11_db": -1.0087947256787058,
-      "peak_gain_dbi": 0.6802529237563604,
-      "bandwidth_hz": 0.0
+      "resonant_freq_hz": 2424000000.0,
+      "min_s11_db": -15.89280841820453,
+      "peak_gain_dbi": 3.3933495622322365,
+      "bandwidth_hz": 15000000.0
     }
   },
   {
@@ -72,18 +72,18 @@
       "W": 0.0211,
       "h": 0.00127,
       "eps_r": 10.2,
-      "y0": 0.0063
+      "y0": 0.0045
     },
     "analytical": {
       "resonant_freq_hz": 2996461538.5848656,
-      "min_s11_db": -13.747018189694861,
-      "peak_gain_dbi": 4.085167998264793,
+      "min_s11_db": -4.082655601034022,
+      "peak_gain_dbi": 2.121423775743924,
       "bandwidth_hz": 0.0
     },
     "hfss": {
-      "resonant_freq_hz": 2842500000.0,
-      "min_s11_db": -7.440984096155187,
-      "peak_gain_dbi": 1.9408888822080448,
+      "resonant_freq_hz": 2973750000.0,
+      "min_s11_db": -11.372105912338446,
+      "peak_gain_dbi": 2.3858205950566593,
       "bandwidth_hz": 0.0
     }
   },
@@ -94,19 +94,19 @@
       "W": 0.0284,
       "h": 0.001524,
       "eps_r": 3.55,
-      "y0": 0.0081
+      "y0": 0.0058
     },
     "analytical": {
       "resonant_freq_hz": 3505679054.952257,
-      "min_s11_db": -20.416497373375165,
-      "peak_gain_dbi": 5.131226481203705,
-      "bandwidth_hz": 25000000.0
+      "min_s11_db": -6.826971556255711,
+      "peak_gain_dbi": 4.16011163558609,
+      "bandwidth_hz": 0.0
     },
     "hfss": {
-      "resonant_freq_hz": 3753750000.0,
-      "min_s11_db": -0.10862004958922393,
-      "peak_gain_dbi": 0.008013525967631541,
-      "bandwidth_hz": 0.0
+      "resonant_freq_hz": 3600625000.0,
+      "min_s11_db": -12.192551878382671,
+      "peak_gain_dbi": 4.264458646304164,
+      "bandwidth_hz": 21875000.0
     }
   },
   {
@@ -116,19 +116,19 @@
       "W": 0.0252,
       "h": 0.001524,
       "eps_r": 3.0,
-      "y0": 0.0071
+      "y0": 0.0051
     },
     "analytical": {
       "resonant_freq_hz": 4197966876.2975082,
-      "min_s11_db": -31.41041369905352,
-      "peak_gain_dbi": 4.9974359115562565,
-      "bandwidth_hz": 50000000.0
+      "min_s11_db": -7.081140596596146,
+      "peak_gain_dbi": 4.054038015529317,
+      "bandwidth_hz": 0.0
     },
     "hfss": {
-      "resonant_freq_hz": 4084500000.0000005,
-      "min_s11_db": -0.23704650906625285,
-      "peak_gain_dbi": 0.15525142492896338,
-      "bandwidth_hz": 0.0
+      "resonant_freq_hz": 4478250000.0,
+      "min_s11_db": -16.672799534644806,
+      "peak_gain_dbi": 5.461536304148564,
+      "bandwidth_hz": 52500000.0
     }
   },
   {
@@ -138,19 +138,19 @@
       "W": 0.0212,
       "h": 0.001524,
       "eps_r": 3.0,
-      "y0": 0.0059
+      "y0": 0.0043
     },
     "analytical": {
       "resonant_freq_hz": 4986908317.974024,
-      "min_s11_db": -20.935770597778728,
-      "peak_gain_dbi": 4.653396599096689,
-      "bandwidth_hz": 75000000.0
+      "min_s11_db": -7.196865621958475,
+      "peak_gain_dbi": 3.7697328924561995,
+      "bandwidth_hz": 0.0
     },
     "hfss": {
-      "resonant_freq_hz": 4643750000.0,
-      "min_s11_db": -0.15079715343626998,
-      "peak_gain_dbi": 0.016784596183401515,
-      "bandwidth_hz": 0.0
+      "resonant_freq_hz": 5581250000.0,
+      "min_s11_db": -27.10525548609015,
+      "peak_gain_dbi": 5.943296604110624,
+      "bandwidth_hz": 93750000.0
     }
   },
   {
@@ -160,19 +160,19 @@
       "W": 0.0204,
       "h": 0.000787,
       "eps_r": 2.2,
-      "y0": 0.006
+      "y0": 0.0043
     },
     "analytical": {
       "resonant_freq_hz": 5807324248.853032,
-      "min_s11_db": -22.347098996334704,
-      "peak_gain_dbi": 5.520238293287694,
-      "bandwidth_hz": 50000000.0
+      "min_s11_db": -7.686512389958537,
+      "peak_gain_dbi": 4.734545148180542,
+      "bandwidth_hz": 0.0
     },
     "hfss": {
-      "resonant_freq_hz": 5604250000.0,
-      "min_s11_db": -0.12982587776735166,
-      "peak_gain_dbi": 0.08113012082345133,
-      "bandwidth_hz": 0.0
+      "resonant_freq_hz": 6003000000.0,
+      "min_s11_db": -13.932579253050982,
+      "peak_gain_dbi": 5.563302245467277,
+      "bandwidth_hz": 36250000.0
     }
   }
 ]

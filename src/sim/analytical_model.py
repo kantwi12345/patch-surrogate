@@ -38,11 +38,21 @@ def _mutual_conductance_G12(W, L, k0):
     val, _ = quad(integrand, 1e-6, np.pi - 1e-6, limit=200)
     return val / (120 * np.pi ** 2)
 
+# Empirical correction factor from M5 HFSS calibration (8 geometries,
+# 1.2-5.8 GHz, golden-section search on true HFSS min S11). The closed-form
+# two-slot cavity model systematically overshoots the true matched inset
+# depth; measured ratios (y0_true/y0_analytical) ranged 0.654-0.899 across
+# substrates (eps_r 2.20-10.20), mean 0.723. See data/m5_y0_bisect.json and
+# M5_RESULTS.md for the calibration data and limitations of this approximation.
+Y0_HFSS_CORRECTION = 0.72
+
+
 def find_matched_inset(design: DesignParams, target_r: float = 50.0) -> float:
     """
     Solve analytically for the inset distance y0 that gives input
     resistance closest to target_r (typically 50 ohms), using the
-    same two-slot model as simulate().
+    same two-slot model as simulate(), then apply an empirical HFSS-
+    calibrated correction factor (see Y0_HFSS_CORRECTION).
     """
     L, W, h, eps_r = design.L, design.W, design.h, design.eps_r
     fr, _ = _resonant_frequency(L, W, h, eps_r)
@@ -54,13 +64,13 @@ def find_matched_inset(design: DesignParams, target_r: float = 50.0) -> float:
     Rin_edge = 1.0 / (2.0 * (G1 + G12))
 
     if Rin_edge <= target_r:
-        # even the edge resistance is already <= target; best is y0=0
         return 0.0
 
     ratio = np.sqrt(target_r / Rin_edge)
     ratio = np.clip(ratio, -1.0, 1.0)
     y0 = (L / np.pi) * np.arccos(ratio)
-    y0_max = 0.48 * L   # stay just inside the physical center
+    y0 = y0 * Y0_HFSS_CORRECTION
+    y0_max = 0.48 * L
     return float(np.clip(y0, 0.0, y0_max))
 
 def simulate(design: DesignParams, freq_hz: np.ndarray) -> SimResult:
