@@ -267,11 +267,14 @@ def design_from_spec(
           f"y0={snapped_design.y0*1e3:.2f}mm")
 
     result = simulate(snapped_design, freq_grid)
-    print("\n=== Ground-truth validation (simulate(), NOT the surrogate) ===")
+    print("\n=== Analytical self-consistency check (simulate(), NOT surrogate, NOT HFSS) ===")
     print(f"True resonant freq: {result.resonant_freq_hz/1e9:.3f} GHz  (target {target_freq_hz/1e9:.3f} GHz)")
     print(f"True min S11:       {result.min_s11_db:.2f} dB  (target <= {target_min_s11_db:.1f} dB)")
     print(f"True peak gain:     {result.peak_gain_dbi:.2f} dBi")
     print(f"True bandwidth:     {result.bandwidth_hz/1e6:.1f} MHz")
+    print("NOTE: y0 is now HFSS-calibrated (see M5_RESULTS.md) and intentionally")
+    print("      detuned from this analytical model's own optimum to match physical")
+    print("      reality. For true validation, run this design through simulate_hfss().")
 
     return {
         "candidates": results[:top_k],
