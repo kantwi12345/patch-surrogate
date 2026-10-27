@@ -6,3 +6,5 @@ __pycache__/
 *.pyc
 .idea/
 checkpoints/
+
+batch.log
