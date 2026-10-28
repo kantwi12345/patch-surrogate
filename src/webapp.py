@@ -111,31 +111,61 @@ def accuracy_badge_html(err_pct, extrapolated):
     )
 
 
-def auto_relax(freq_ghz, min_s11_db, gain_dbi, max_steps=6, step_db=2):
+def auto_relax(freq_ghz, min_s11_db, gain_dbi, max_steps=12, s11_step=2, gain_step=0.5,
+                s11_floor=-5, gain_floor=0.0):
+    """
+    Try the requested S11 (and, if set, gain) target together. If either
+    isn't met, progressively relax whichever constraint(s) failed and
+    retry -- S11 toward -5dB (least strict allowed), gain toward 0dBi --
+    up to max_steps times. Returns the best result found, the final
+    (possibly relaxed) targets, and a full attempt log for transparency.
+    """
     attempts = []
-    target = min_s11_db
+    target_s11 = min_s11_db
+    target_gain = gain_dbi
     result, gt = None, None
-    for i in range(max_steps):
+
+    for _ in range(max_steps):
         result = design_from_spec(
             target_freq_hz=freq_ghz * 1e9,
-            target_min_s11_db=target,
-            target_gain_dbi=gain_dbi,
+            target_min_s11_db=target_s11,
+            target_gain_dbi=target_gain,
         )
         gt = result["ground_truth"]
-        met = gt.min_s11_db <= target
-        attempts.append({"target_s11_db": target, "achieved_s11_db": gt.min_s11_db, "met": met})
-        if met:
-            return result, gt, target, attempts
-        if target >= -5:
+        s11_met = gt.min_s11_db <= target_s11
+        gain_met = (target_gain is None) or (gt.peak_gain_dbi >= target_gain)
+
+        attempts.append({
+            "target_s11_db": target_s11, "achieved_s11_db": gt.min_s11_db,
+            "target_gain_dbi": target_gain,
+            "achieved_gain_dbi": gt.peak_gain_dbi,
+            "met": s11_met and gain_met,
+        })
+
+        if s11_met and gain_met:
+            return result, gt, target_s11, target_gain, attempts
+
+        new_s11, new_gain = target_s11, target_gain
+        if not gain_met and target_gain is not None:
+            new_gain = max(target_gain - gain_step, gain_floor)
+        if not s11_met:
+            new_s11 = min(target_s11 + s11_step, s11_floor)
+
+        if (new_s11, new_gain) == (target_s11, target_gain):
             break
-        target = min(target + step_db, -5)
-    return result, gt, target, attempts
+        target_s11, target_gain = new_s11, new_gain
+
+    return result, gt, target_s11, target_gain, attempts
 
 
 def compute_vswr(s11_db):
-    gamma = np.clip(10 ** (s11_db / 20.0), 0, 0.999)
+    gamma = np.clip(10 ** (np.asarray(s11_db) / 20.0), 0, 0.999)
     return (1 + gamma) / (1 - gamma)
 
+
+# ---------------------------------------------------------------------------
+# 3D CAD-style geometry schematic (inset-fed microstrip patch)
+# ---------------------------------------------------------------------------
 def box_mesh(xr, yr, zr, color, opacity=1.0, name="", showlegend=True):
     x0, x1 = xr
     y0, y1 = yr
@@ -146,16 +176,15 @@ def box_mesh(xr, yr, zr, color, opacity=1.0, name="", showlegend=True):
     i = [0, 0, 4, 4, 0, 0, 3, 3, 0, 0, 1, 1]
     j = [1, 2, 5, 6, 1, 5, 2, 6, 3, 7, 2, 6]
     k = [2, 3, 6, 7, 5, 4, 6, 7, 7, 4, 6, 5]
-    return go.Mesh3d(x=xs, y=ys, z=zs, i=i, j=j, k=k,
-                      color=color, opacity=opacity, name=name,
-                      flatshading=True, showlegend=showlegend)
+    return go.Mesh3d(
+        x=xs, y=ys, z=zs, i=i, j=j, k=k,
+        color=color, opacity=opacity, name=name, flatshading=True, showlegend=showlegend,
+        lighting=dict(ambient=0.85, diffuse=0.4, specular=0.05, roughness=0.9, fresnel=0.05),
+        lightposition=dict(x=100, y=200, z=300),
+    )
+
+
 def box_edges(xr, yr, zr, color="black", width=3):
-    """
-    Draws the 12 edges of a box as crisp black lines on top of the shaded
-    Mesh3d faces, the way HFSS's CAD viewport outlines every solid body
-    edge. Plotly's Mesh3d alone has no edge rendering, so this overlay is
-    what gives the schematic/CAD look instead of a flat-shaded blob.
-    """
     x0, x1 = xr
     y0, y1 = yr
     z0, z1 = zr
@@ -175,14 +204,6 @@ def box_edges(xr, yr, zr, color="black", width=3):
 
 
 def build_3d_view(L_mm, W_mm, h_mm, y0_mm):
-    """
-    Schematic diagram of the inset-fed microstrip patch antenna, matching
-    standard HFSS-style CAD drawings: ground plane, substrate, copper patch
-    with an inset feed notch, a microstrip feed line trace running from the
-    substrate edge into the notch, and a lumped port at the substrate edge.
-    This is the same inset-fed topology (parameterized by y0) used by the
-    analytical model and HFSS runs throughout this project.
-    """
     gnd_margin, sub_margin = 8.0, 3.0
     gnd_thk, patch_thk, line_thk = 0.5, 0.06, 0.05
     notch_w = max(W_mm * 0.08, 1.2)
@@ -198,20 +219,12 @@ def build_3d_view(L_mm, W_mm, h_mm, y0_mm):
                           color="#4caf6a", opacity=0.9, name="Substrate")
     patch = box_mesh((-W_mm/2, W_mm/2), (-L_mm/2, L_mm/2),
                       (h_mm, h_mm + patch_thk), color="#f4d942", opacity=1.0, name="Copper Patch")
-
-    # Inset notch cut into the bottom edge of the patch, depth y0.
     notch = box_mesh((-notch_w/2, notch_w/2), (-L_mm/2, -L_mm/2 + y0_mm),
                       (h_mm, h_mm + patch_thk * 0.5), color="#4caf6a", opacity=1.0,
                       name="Feed notch (inset)")
-
-    # Microstrip feed line: a thin copper trace running from the substrate's
-    # outer edge up to the inset notch, matching the reference HFSS diagram.
     feed_line = box_mesh((-line_w/2, line_w/2), (sub_y0, -L_mm/2 + y0_mm),
                           (h_mm, h_mm + line_thk), color="#f4d942", opacity=1.0,
                           name="Feed Line")
-
-    # Lumped port: vertical excitation facet at the substrate's outer edge,
-    # where the feed line trace terminates — matches standard HFSS port placement.
     port = box_mesh((-line_w/2, line_w/2), (sub_y0 - 0.25, sub_y0 + 0.25),
                      (0, h_mm), color="#cc0000", opacity=1.0, name="Lumped Port")
 
@@ -226,7 +239,6 @@ def build_3d_view(L_mm, W_mm, h_mm, y0_mm):
     port_edges = box_edges((-line_w/2, line_w/2), (sub_y0 - 0.25, sub_y0 + 0.25),
                             (0, h_mm), color="#660000")
 
-    # Dimension annotation lines (W and L), CAD-drawing style, offset outside the patch.
     dim_offset = max(W_mm, L_mm) * 0.18
     dim_z = h_mm + patch_thk + 1.0
     w_dim = go.Scatter3d(
@@ -266,27 +278,70 @@ def build_3d_view(L_mm, W_mm, h_mm, y0_mm):
     )
     return fig
 
-def radiation_pattern_fig(gain_dbi):
-    n = max(2.0, 2 * max(gain_dbi, 1.0) / 3 + 2)
-    theta = np.linspace(0, np.pi/2, 40)
-    phi = np.linspace(0, 2*np.pi, 60)
-    theta, phi = np.meshgrid(theta, phi)
-    r = np.cos(theta) ** n
-    x = r * np.sin(theta) * np.cos(phi)
-    y = r * np.sin(theta) * np.sin(phi)
-    z = r * np.cos(theta)
+
+# ---------------------------------------------------------------------------
+# Radiation pattern: cavity-model (two-slot) closed-form approximation,
+# driven by this design's actual L, W, and resonant frequency.
+# ---------------------------------------------------------------------------
+def cavity_model_pattern(theta_rad, L_m, W_m, freq_hz):
+    c = 3e8
+    k0 = 2 * np.pi * freq_hz / c
+    sin_t = np.sin(theta_rad)
+
+    e_plane = np.cos((k0 * L_m / 2) * sin_t)
+
+    x = (k0 * W_m / 2) * sin_t
+    h_plane = np.where(np.abs(x) < 1e-6, 1.0, np.sin(x) / np.where(x == 0, 1.0, x))
+    h_plane = h_plane * np.cos(theta_rad)
+
+    return np.abs(e_plane), np.abs(h_plane)
+
+
+def build_pattern_cuts_2d(L_m, W_m, freq_hz):
+    theta_deg = np.linspace(-90, 90, 181)
+    theta_rad = np.radians(theta_deg)
+    e_plane, h_plane = cavity_model_pattern(theta_rad, L_m, W_m, freq_hz)
+    e_db = np.clip(20 * np.log10(np.clip(e_plane, 1e-3, None)), -30, 0) + 30
+    h_db = np.clip(20 * np.log10(np.clip(h_plane, 1e-3, None)), -30, 0) + 30
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(r=e_db, theta=theta_deg, mode="lines",
+                                   name="E-plane", line=dict(color="#2d5f8a", width=3)))
+    fig.add_trace(go.Scatterpolar(r=h_db, theta=theta_deg, mode="lines",
+                                   name="H-plane", line=dict(color="#cf222e", width=3)))
+    fig.update_layout(
+        polar=dict(radialaxis=dict(range=[0, 30], showticklabels=False, ticks=""),
+                   angularaxis=dict(direction="clockwise")),
+        template="plotly_white", height=380, margin=dict(t=30),
+        legend=dict(orientation="h", y=-0.1),
+    )
+    return fig
+
+
+def build_pattern_3d(L_m, W_m, freq_hz):
+    theta = np.linspace(0, np.pi / 2, 50)
+    phi = np.linspace(0, 2 * np.pi, 72)
+    theta_grid, phi_grid = np.meshgrid(theta, phi)
+
+    e_plane, h_plane = cavity_model_pattern(theta_grid, L_m, W_m, freq_hz)
+    power = (h_plane ** 2) * np.cos(phi_grid) ** 2 + (e_plane ** 2) * np.sin(phi_grid) ** 2
+    r = np.sqrt(np.clip(power, 0, None))
+
+    x = r * np.sin(theta_grid) * np.cos(phi_grid)
+    y = r * np.sin(theta_grid) * np.sin(phi_grid)
+    z = r * np.cos(theta_grid)
+
     fig = go.Figure(data=[go.Surface(x=x, y=y, z=z, surfacecolor=r,
                                       colorscale="Viridis", showscale=False)])
     fig.update_layout(
-        scene=dict(aspectmode="data",
-                   xaxis_title="", yaxis_title="", zaxis_title=""),
+        scene=dict(aspectmode="data", xaxis_title="", yaxis_title="", zaxis_title=""),
         margin=dict(l=0, r=0, t=10, b=0), height=420,
     )
     return fig
 
 
 # ---------------------------------------------------------------------------
-# Sidebar — target spec + auto inverse-design search
+# Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.header("⚙️ Target Spec")
@@ -296,7 +351,8 @@ with st.sidebar:
     gain_dbi = st.slider("Target gain (dBi)", 0.0, 10.0, 5.0, 0.5) if use_gain else None
     st.divider()
     run_btn = st.button("🚀 Auto-Design (inverse search)", use_container_width=True, type="primary")
-    st.caption("Auto-relaxes the S11 threshold if your target isn't achievable.")
+    st.caption("Auto-relaxes the S11 and/or gain targets if your combined spec isn't achievable, "
+               "and reports the closest achievable design.")
     st.caption(f"HFSS-calibrated for {CALIB_MIN:.1f}–{CALIB_MAX:.1f} GHz.")
     st.divider()
     if HFSS_AVAILABLE:
@@ -304,7 +360,6 @@ with st.sidebar:
     else:
         st.caption("⚪ pyaedt unavailable in this environment — HFSS tab disabled.")
 
-# defaults for the live workspace (used until an auto-search overwrites them)
 for key, default in [("ws_L", 29.4), ("ws_W", 38.0), ("ws_h", 1.6),
                       ("ws_eps", 4.4), ("ws_y0", 7.9)]:
     if key not in st.session_state:
@@ -312,7 +367,7 @@ for key, default in [("ws_L", 29.4), ("ws_W", 38.0), ("ws_h", 1.6),
 
 if run_btn:
     with st.spinner("Running inverse search..."):
-        result, gt, effective_target, attempts = auto_relax(freq_ghz, min_s11_db, gain_dbi)
+        result, gt, effective_target, effective_gain, attempts = auto_relax(freq_ghz, min_s11_db, gain_dbi)
     design = result["snapped_design"]
     st.session_state["ws_L"] = round(design.L * 1e3, 3)
     st.session_state["ws_W"] = round(design.W * 1e3, 3)
@@ -322,37 +377,59 @@ if run_btn:
     st.session_state["auto_result"] = result
     st.session_state["auto_gt"] = gt
     st.session_state["auto_effective_target"] = effective_target
+    st.session_state["auto_effective_gain"] = effective_gain
     st.session_state["auto_attempts"] = attempts
-    st.session_state["auto_relaxed"] = effective_target != min_s11_db
+    st.session_state["auto_relaxed"] = (effective_target != min_s11_db) or (effective_gain != gain_dbi)
     st.session_state["auto_orig_target"] = min_s11_db
+    st.session_state["auto_orig_gain"] = gain_dbi
     st.session_state["auto_freq_ghz"] = freq_ghz
+    st.session_state.pop("hfss_result", None)
 
 tab1, tab2, tab3 = st.tabs(["🧊 Design Workspace", "🔍 Raw Candidates", "🔬 HFSS Validation"])
 
 # ---------------------------------------------------------------------------
-# TAB 1 — CAD-style split workspace
+# TAB 1 — CAD-style split workspace (this IS the manual fine-tune surface:
+# the left accordion sliders drive the live 3D model + S11/VSWR/Radiation
+# panels on the right in real time)
 # ---------------------------------------------------------------------------
 with tab1:
     if "auto_relaxed" in st.session_state and st.session_state["auto_relaxed"]:
         gt0 = st.session_state["auto_gt"]
         tgt0 = st.session_state["auto_effective_target"]
+        gain0 = st.session_state["auto_effective_gain"]
         orig0 = st.session_state["auto_orig_target"]
+        orig_gain0 = st.session_state["auto_orig_gain"]
         f0 = st.session_state["auto_freq_ghz"]
-        if gt0.min_s11_db <= tgt0:
-            st.warning(f"⚠️ Target {orig0}dB not achievable at {f0}GHz — auto-relaxed to {tgt0}dB "
-                       f"(achieved {gt0.min_s11_db:.1f}dB). Workspace below is pre-loaded with this result; edit freely.")
+
+        s11_ok = gt0.min_s11_db <= tgt0
+        gain_ok = (gain0 is None) or (gt0.peak_gain_dbi >= gain0)
+
+        msgs = []
+        if tgt0 != orig0:
+            msgs.append(f"S11 target {orig0}dB → relaxed to {tgt0}dB (achieved {gt0.min_s11_db:.1f}dB)")
+        if orig_gain0 is not None and gain0 != orig_gain0:
+            msgs.append(f"Gain target {orig_gain0}dBi → relaxed to {gain0:.1f}dBi (achieved {gt0.peak_gain_dbi:.2f}dBi)")
+        msg_text = "; ".join(msgs) if msgs else "target adjusted"
+
+        if s11_ok and gain_ok:
+            st.warning(f"⚠️ Original target not fully achievable at {f0}GHz — auto-relaxed. {msg_text}. "
+                       "Workspace below is pre-loaded with this result; edit freely.")
         else:
-            st.error(f"❌ Could not meet target even after relaxing to {tgt0}dB. Best achieved: "
-                     f"{gt0.min_s11_db:.1f}dB. Workspace pre-loaded with closest attempt.")
+            st.error(f"❌ Could not meet target even after relaxing as far as allowed. "
+                     f"Achieved S11={gt0.min_s11_db:.1f}dB, Gain={gt0.peak_gain_dbi:.2f}dBi. "
+                     "Workspace pre-loaded with closest attempt.")
+
         with st.expander("Auto-relax attempt log"):
             for a in st.session_state["auto_attempts"]:
                 tick = "✅" if a["met"] else "—"
-                st.write(f"{tick} target {a['target_s11_db']}dB → achieved {a['achieved_s11_db']:.2f}dB")
+                gain_str = (f", gain target {a['target_gain_dbi']}dBi → achieved {a['achieved_gain_dbi']:.2f}dBi"
+                            if a["target_gain_dbi"] is not None else "")
+                st.write(f"{tick} S11 target {a['target_s11_db']}dB → achieved {a['achieved_s11_db']:.2f}dB{gain_str}")
 
     left, center, right = st.columns([1, 1.7, 1.3])
 
     with left:
-        st.markdown("#### 📋 Parameters")
+        st.markdown("#### 📋 Parameters (manual fine-tune)")
         with st.expander("Substrate", expanded=True):
             st.slider("εr (permittivity)", 1.5, 12.0, key="ws_eps", step=0.05)
             st.slider("Height h (mm)", 0.1, 6.0, key="ws_h", step=0.01)
@@ -386,10 +463,16 @@ with tab1:
         if sim_ok:
             err_pct, extrapolated = estimate_accuracy(live_gt.resonant_freq_hz / 1e9)
             st.markdown(accuracy_badge_html(err_pct, extrapolated), unsafe_allow_html=True)
-            spec_met = live_gt.min_s11_db <= min_s11_db
-            status_class = "status-pass" if spec_met else "status-fail"
-            status_text = "✅ MEETS sidebar S11 target" if spec_met else "⚠️ does not meet sidebar S11 target"
+
+            s11_ok_live = live_gt.min_s11_db <= min_s11_db
+            status_class = "status-pass" if s11_ok_live else "status-fail"
+            status_text = "✅ MEETS sidebar S11 target" if s11_ok_live else "⚠️ does not meet sidebar S11 target"
             st.markdown(f'<span class="{status_class}">{status_text}</span>', unsafe_allow_html=True)
+
+            if gain_dbi is not None:
+                gain_ok_live = live_gt.peak_gain_dbi >= gain_dbi
+                st.caption("✅ meets sidebar gain target" if gain_ok_live
+                           else "⚠️ below sidebar gain target — try Auto-Design or hand-tune geometry")
 
     with center:
         st.markdown("#### 🧊 3D Geometry (live)")
@@ -398,20 +481,20 @@ with tab1:
                           st.session_state["ws_h"], st.session_state["ws_y0"]),
             use_container_width=True,
         )
-        st.caption("Inset-fed patch antenna diagram: copper patch (yellow) on substrate (green) over a "
-                   "ground plane, with the feed notch and lumped port shown at the inset depth y0 — the "
-                   "same topology used by the analytical model and HFSS runs in this project. "
-                   "Geometric illustration from current parameters, not a live EM solve in-browser.")
+        st.caption("Inset-fed microstrip patch antenna: copper patch (yellow) on substrate (green) over "
+                   "a ground plane, with the feed line trace running from the substrate edge into the "
+                   "inset notch at depth y0, and the lumped port where it terminates — matching the "
+                   "standard inset-fed topology used by the analytical model and HFSS runs in this project.")
 
     with right:
-        st.markdown("#### 📈 Physics")
+        st.markdown("#### 📈 Physics (analytical model)")
         if sim_ok:
-            c1, c2, c3 = st.columns(3)
-            c1.metric("f₀", f"{live_gt.resonant_freq_hz/1e9:.3f} GHz")
-            c2.metric("S11", f"{live_gt.min_s11_db:.1f} dB")
-            c3.metric("Gain", f"{live_gt.peak_gain_dbi:.2f} dBi")
+            pc1, pc2, pc3 = st.columns(3)
+            pc1.metric("f₀", f"{live_gt.resonant_freq_hz/1e9:.3f} GHz")
+            pc2.metric("S11", f"{live_gt.min_s11_db:.1f} dB")
+            pc3.metric("Gain", f"{live_gt.peak_gain_dbi:.2f} dBi")
 
-            pt1, pt2, pt3 = st.tabs(["S11", "VSWR", "Radiation (illustrative)"])
+            pt1, pt2, pt3 = st.tabs(["S11", "VSWR", "Radiation Pattern"])
             with pt1:
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=live_gt.freq_hz/1e9, y=live_gt.s11_db,
@@ -433,9 +516,14 @@ with tab1:
                                    xaxis_title="GHz", yaxis_title="VSWR", margin=dict(t=20))
                 st.plotly_chart(fig, use_container_width=True)
             with pt3:
-                st.plotly_chart(radiation_pattern_fig(live_gt.peak_gain_dbi), use_container_width=True)
-                st.caption("⚠️ Illustrative generic broadside lobe shape only — NOT a simulated far-field "
-                           "pattern for this design. Only the peak gain magnitude is real data.")
+                st.plotly_chart(build_pattern_cuts_2d(live_design.L, live_design.W,
+                                                       live_gt.resonant_freq_hz), use_container_width=True)
+                st.plotly_chart(build_pattern_3d(live_design.L, live_design.W,
+                                                  live_gt.resonant_freq_hz), use_container_width=True)
+                st.caption("Cavity-model (two-slot) closed-form E-plane/H-plane patterns, computed from "
+                           "this design's actual L, W and resonant frequency (Balanis two-slot "
+                           "approximation). The 3D surface interpolates between these two cuts. This is "
+                           "a standard analytical approximation, NOT a full-wave HFSS far-field result.")
 
     st.caption("⚠️ Workspace physics use the analytical model (fast, approximate). "
                "For ground truth, run **HFSS Validation**.")
@@ -457,20 +545,20 @@ with tab2:
 # ---------------------------------------------------------------------------
 with tab3:
     st.caption("Runs the **actual** HFSS full-wave simulation on the current workspace geometry "
-               "(left panel values) — ground truth, not the analytical approximation.")
+               "(left panel values in Design Workspace) — ground truth, not the analytical approximation.")
 
     if not HFSS_AVAILABLE:
         st.error("pyaedt / hfss_model unavailable in this environment. Requires local Windows + "
                  "AEDT 2022 R1 + pyaedt==0.6.70. Not available on Colab/cloud.")
     else:
-        design = DesignParams(
+        hfss_design = DesignParams(
             L=st.session_state["ws_L"] / 1e3, W=st.session_state["ws_W"] / 1e3,
             h=st.session_state["ws_h"] / 1e3, eps_r=st.session_state["ws_eps"],
             y0=st.session_state["ws_y0"] / 1e3,
         )
         st.markdown('<div class="result-card">', unsafe_allow_html=True)
-        st.write(f"**Design to validate:** L={design.L*1e3:.2f}mm, W={design.W*1e3:.2f}mm, "
-                 f"h={design.h*1e3:.3f}mm, εr={design.eps_r:.2f}, y0={design.y0*1e3:.2f}mm")
+        st.write(f"**Design to validate:** L={hfss_design.L*1e3:.2f}mm, W={hfss_design.W*1e3:.2f}mm, "
+                 f"h={hfss_design.h*1e3:.3f}mm, εr={hfss_design.eps_r:.2f}, y0={hfss_design.y0*1e3:.2f}mm")
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.warning("⏱️ Takes 5-10 minutes, uses a local AEDT license. Confirm no zombie "
@@ -479,25 +567,48 @@ with tab3:
         hfss_btn = st.button("🔬 Run HFSS Validation", disabled=not confirm, type="primary")
 
         if hfss_btn:
-            freq_hz = np.linspace(freq_ghz * 0.8e9, freq_ghz * 1.2e9, 81)
+            hfss_freq_hz = np.linspace(freq_ghz * 0.8e9, freq_ghz * 1.2e9, 81)
             try:
                 with st.spinner("Running HFSS full-wave simulation (5-10 min)..."):
-                    hfss_gt = simulate_hfss(design, freq_hz, non_graphical=True)
-                st.session_state["hfss_result"] = hfss_gt
+                    hfss_gt_new = simulate_hfss(hfss_design, hfss_freq_hz, non_graphical=True)
+                st.session_state["hfss_result"] = hfss_gt_new
+                st.session_state["hfss_design_used"] = hfss_design
+                st.session_state["hfss_target_freq_ghz"] = freq_ghz
                 st.success("HFSS simulation complete.")
             except Exception as e:
                 st.error(f"HFSS simulation failed: {e}")
 
         if "hfss_result" in st.session_state:
             hfss_gt = st.session_state["hfss_result"]
-            freq_err_pct = abs(hfss_gt.resonant_freq_hz - freq_ghz * 1e9) / (freq_ghz * 1e9) * 100
+            hfss_design_used = st.session_state["hfss_design_used"]
+            hfss_target_freq_ghz = st.session_state["hfss_target_freq_ghz"]
+            freq_err_pct = abs(hfss_gt.resonant_freq_hz - hfss_target_freq_ghz * 1e9) / (hfss_target_freq_ghz * 1e9) * 100
 
-            c1, c2, c3 = st.columns(3)
-            c1.metric("HFSS f₀", f"{hfss_gt.resonant_freq_hz/1e9:.3f} GHz", f"{freq_err_pct:.1f}% error")
-            c2.metric("HFSS S11", f"{hfss_gt.min_s11_db:.1f} dB")
-            c3.metric("HFSS Gain", f"{hfss_gt.peak_gain_dbi:.2f} dBi")
+            hc1, hc2, hc3, hc4 = st.columns(4)
+            hc1.metric("HFSS f₀", f"{hfss_gt.resonant_freq_hz/1e9:.3f} GHz", f"{freq_err_pct:.1f}% error")
+            hc2.metric("HFSS S11", f"{hfss_gt.min_s11_db:.1f} dB")
+            hfss_vswr_min = compute_vswr(hfss_gt.min_s11_db)
+            hc3.metric("HFSS VSWR (at min S11)", f"{float(hfss_vswr_min):.2f}")
+            hc4.metric("HFSS Gain", f"{hfss_gt.peak_gain_dbi:.2f} dBi")
 
-            analytical_gt = simulate(design, np.linspace(0.5e9, 10e9, 600))
+            with st.expander("🔧 Debug: raw HFSS result values"):
+                st.write({
+                    "resonant_freq_hz": hfss_gt.resonant_freq_hz,
+                    "min_s11_db": hfss_gt.min_s11_db,
+                    "peak_gain_dbi": hfss_gt.peak_gain_dbi,
+                    "freq_hz array length": len(hfss_gt.freq_hz),
+                    "s11_db array length": len(hfss_gt.s11_db),
+                })
+
+            vswr_fig = go.Figure()
+            vswr_fig.add_trace(go.Scatter(x=hfss_gt.freq_hz/1e9, y=compute_vswr(hfss_gt.s11_db),
+                                           mode="lines", name="VSWR (HFSS)", line=dict(color="#8a4b2d", width=3)))
+            vswr_fig.add_hline(y=2.0, line_dash="dash", line_color="#cf222e", annotation_text="VSWR=2")
+            vswr_fig.update_layout(title="HFSS VSWR vs Frequency", xaxis_title="GHz", yaxis_title="VSWR",
+                                    template="plotly_white", height=320)
+            st.plotly_chart(vswr_fig, use_container_width=True)
+
+            analytical_gt = simulate(hfss_design_used, np.linspace(0.5e9, 10e9, 600))
             fig3 = go.Figure()
             fig3.add_trace(go.Scatter(x=analytical_gt.freq_hz/1e9, y=analytical_gt.s11_db,
                                        mode="lines", name="Analytical",
