@@ -1,5 +1,5 @@
 """
-M4 — Real HFSS simulation via pyaedt, built incrementally.
+M4 - Real HFSS simulation via pyaedt, built incrementally.
 
 STAGE 1: geometry only - DONE, verified.
 STAGE 2: lumped port - DONE, verified.
@@ -161,6 +161,8 @@ def setup_and_solve(hfss, fr_est, sweep_frac=0.15, n_points=81,
     print("Starting analysis (this may take a few minutes)...")
     hfss.analyze_setup(setup_name)
     print("Analysis complete.")
+
+
 def extract_s11(hfss, setup_name="Setup1", sweep_name="Sweep1"):
     """Pull S11 (dB) vs frequency (Hz) from the completed sweep."""
     solution = hfss.post.get_solution_data(
@@ -171,6 +173,7 @@ def extract_s11(hfss, setup_name="Setup1", sweep_name="Sweep1"):
     s11_db = np.array(solution.data_real(), dtype=float)
     freq_hz = freq_ghz * 1e9
     return freq_hz, s11_db
+
 
 def extract_zin(hfss, setup_name="Setup1", sweep_name="Sweep1", z0=50.0):
     """
@@ -195,17 +198,31 @@ def extract_zin(hfss, setup_name="Setup1", sweep_name="Sweep1", z0=50.0):
     freq_hz = freq_ghz * 1e9
     return freq_hz, zin.real, zin.imag
 
-def add_farfield_sphere(hfss, name="Boresight"):
+
+def add_farfield_sphere(hfss, name="Boresight", full_pattern=False,
+                         theta_step=5, phi_step=15):
     """
-    Create an infinite sphere at boresight (theta=0, phi=0), which for this
-    geometry (patch in XY plane, radiating +Z) is the main lobe direction.
+    Create an infinite sphere far-field setup.
+    full_pattern=False (default): single boresight point (theta=0, phi=0)
+    -- fast, this is the original behavior used by simulate_hfss()/M4/M5.
+    full_pattern=True: full theta(0-180)/phi(0-360) angular grid, needed
+    to plot a real 3D radiation pattern in the webapp.
     """
-    hfss.insert_infinite_sphere(
-        x_start=0, x_stop=0, x_step=1,
-        y_start=0, y_stop=0, y_step=1,
-        name=name,
-    )
-    print(f"Infinite sphere '{name}' created at boresight (theta=0, phi=0).")
+    if full_pattern:
+        hfss.insert_infinite_sphere(
+            x_start=0, x_stop=180, x_step=theta_step,
+            y_start=0, y_stop=360, y_step=phi_step,
+            name=name,
+        )
+        print(f"Infinite sphere '{name}' created: full pattern "
+              f"theta=0-180 step {theta_step}, phi=0-360 step {phi_step}.")
+    else:
+        hfss.insert_infinite_sphere(
+            x_start=0, x_stop=0, x_step=1,
+            y_start=0, y_stop=0, y_step=1,
+            name=name,
+        )
+        print(f"Infinite sphere '{name}' created at boresight (theta=0, phi=0).")
     return name
 
 
@@ -221,6 +238,58 @@ def extract_gain(hfss, setup_name="Setup1", sweep_name="Sweep1", sphere_name="Bo
     gain_db = np.array(solution.data_real(), dtype=float)
     freq_hz = freq_ghz * 1e9
     return freq_hz, gain_db
+
+def extract_farfield_pattern(hfss, setup_name="Setup1", sweep_name="Sweep1",
+                              sphere_name="FullPattern", freq_ghz=None,
+                              expression="RealizedGainTotal"):
+    """
+    Pull the full far-field gain pattern (theta x phi grid) at one frequency
+    from a full-pattern infinite sphere.
+
+    pyaedt's SolutionData.data_real() only varies ONE "primary sweep"
+    intrinsic at a time, holding all others fixed at active_intrinsic[...]
+    (confirmed via direct inspection of pyaedt/modules/solutions.py --
+    _variation_tuple() reads active_intrinsic for every non-primary-sweep
+    intrinsic). So we manually loop over Phi, with primary_sweep="Theta",
+    reading one full Theta sweep (a column of the pattern) per Phi value.
+
+    Returns (theta_deg, phi_deg, gain_db) with gain_db shape
+    (len(theta_deg), len(phi_deg)).
+    """
+    solution = hfss.post.get_far_field_data(
+        expression=expression,
+        setup_sweep_name=f"{setup_name} : {sweep_name}",
+        domain=sphere_name,
+    )
+
+    if freq_ghz is not None and "Freq" in solution.intrinsics:
+        freq_vals = [float(f) for f in solution.intrinsics["Freq"]]
+        nearest = min(freq_vals, key=lambda f: abs(f - freq_ghz))
+        match = [f for f in solution.intrinsics["Freq"] if float(f) == nearest][0]
+        solution.active_intrinsic["Freq"] = match
+
+    solution.primary_sweep = "Theta"
+    theta_deg = np.array(sorted(float(v) for v in solution.intrinsics["Theta"]))
+    phi_vals_raw = sorted(solution.intrinsics["Phi"], key=lambda v: float(v))
+    phi_deg = np.array([float(v) for v in phi_vals_raw])
+
+    gain_grid_db = np.full((len(theta_deg), len(phi_deg)), np.nan)
+    for j, phi_val in enumerate(phi_vals_raw):
+        solution.active_intrinsic["Phi"] = phi_val
+        theta_vals_this = [float(v) for v in solution.primary_sweep_values]
+        col_raw = solution.data_real(expression)
+        col = np.array([np.nan if v is None else v for v in col_raw], dtype=float)
+        for i, tv in enumerate(theta_vals_this):
+            idx = int(np.argmin(np.abs(theta_deg - tv)))
+            gain_grid_db[idx, j] = col[i]
+
+    if np.isnan(gain_grid_db).any():
+        raise ValueError(
+            f"far-field grid has {int(np.isnan(gain_grid_db).sum())} missing points out of "
+            f"{gain_grid_db.size} -- theta/phi intrinsic value matching failed somewhere."
+        )
+
+    return theta_deg, phi_deg, gain_grid_db
 
 
 def _find_resonance(freq_hz, s11_db, fr_est_hz=None):
@@ -316,6 +385,67 @@ def simulate_hfss(design: DesignParams, freq_hz: np.ndarray, non_graphical=True,
         hfss.release_desktop(close_projects=True, close_desktop=True)
 
 
+def simulate_hfss_with_pattern(design: DesignParams, freq_hz: np.ndarray,
+                                non_graphical=False, n_points=81,
+                                pattern_theta_step=5, pattern_phi_step=15,
+                                keep_open=False):
+    """
+    GUI-visible build + solve + S11/gain + full far-field pattern.
+    Same physics pipeline as simulate_hfss() (same setup/sweep/_find_resonance),
+    plus a full angular far-field sphere instead of boresight-only.
+
+    Returns (SimResult, pattern_dict | None), where pattern_dict =
+        {"theta_deg": 1D array, "phi_deg": 1D array, "gain_db": 2D array}
+    pattern_dict is None if pattern extraction fails (S11/gain result is
+    still returned/trustworthy regardless).
+    """
+    f_lo = float(np.min(freq_hz)) * 0.95
+    f_hi = float(np.max(freq_hz)) * 1.05
+
+    hfss, fr_est = build_geometry(
+        design, non_graphical=non_graphical,
+        create_port=True, create_airbox=True, use_inset=True,
+    )
+    try:
+        add_farfield_sphere(hfss, name="FullPattern", full_pattern=True,
+                             theta_step=pattern_theta_step, phi_step=pattern_phi_step)
+        setup_and_solve(hfss, fr_est, freq_start_hz=f_lo, freq_stop_hz=f_hi, n_points=n_points)
+
+        hfss_freq_hz, s11_db_raw = extract_s11(hfss)
+        resonant_freq_hz, min_s11_db, bandwidth_hz, res_idx = _find_resonance(
+            hfss_freq_hz, s11_db_raw, fr_est_hz=fr_est,
+        )
+
+        hfss_freq_hz_g, gain_db_raw = extract_gain(hfss, sphere_name="FullPattern")
+        gain_db_aligned = np.interp(hfss_freq_hz, hfss_freq_hz_g, gain_db_raw)
+        peak_gain_dbi = float(gain_db_aligned[res_idx])
+
+        s11_db = np.interp(freq_hz, hfss_freq_hz, s11_db_raw)
+        gain_dbi = np.interp(freq_hz, hfss_freq_hz, gain_db_aligned)
+
+        result = SimResult(
+            freq_hz=freq_hz, s11_db=s11_db, gain_dbi=gain_dbi,
+            resonant_freq_hz=resonant_freq_hz, bandwidth_hz=bandwidth_hz,
+            min_s11_db=min_s11_db, peak_gain_dbi=peak_gain_dbi,
+        )
+
+        pattern = None
+        try:
+            theta_deg, phi_deg, gain_grid_db = extract_farfield_pattern(
+                hfss, sphere_name="FullPattern", freq_ghz=resonant_freq_hz / 1e9,
+            )
+            pattern = {"theta_deg": theta_deg, "phi_deg": phi_deg, "gain_db": gain_grid_db}
+        except Exception as e:
+            print(f"WARNING: far-field pattern extraction failed: {e}")
+
+        return result, pattern
+    finally:
+        if not keep_open:
+            hfss.release_desktop(close_projects=True, close_desktop=True)
+        else:
+            print("NOTE: keep_open=True -- leaving AEDT open. Close it manually when done.")
+
+
 if __name__ == "__main__":
     test_design = DesignParams(
         L=0.02940, W=0.03800, h=0.0016, eps_r=4.40, y0=0.00750,
@@ -325,7 +455,6 @@ if __name__ == "__main__":
     add_farfield_sphere(hfss)
     setup_and_solve(hfss, fr_est)
 
-
     freq_hz, s11_db = extract_s11(hfss)
     min_idx = np.argmin(s11_db)
     print(f"\n=== HFSS S11 results ===")
@@ -334,18 +463,20 @@ if __name__ == "__main__":
     print("Full S11 curve (GHz, dB):")
     for f, s in zip(freq_hz, s11_db):
         print(f"  {f/1e9:.3f}  {s:.2f}")
-        freq_hz_z, re_zin, im_zin = extract_zin(hfss)
-        print(f"\n=== HFSS Zin results ===")
-        print("Full Zin curve (GHz, Re(Zin) ohm, Im(Zin) ohm):")
-        for f, r, im in zip(freq_hz_z, re_zin, im_zin):
-            print(f"  {f / 1e9:.3f}  {r:.2f}  {im:.2f}")
-            freq_hz_g, gain_db = extract_gain(hfss)
-            print(f"\n=== HFSS Gain results (boresight) ===")
-            peak_idx = np.argmax(gain_db)
-            print(f"Peak realized gain: {gain_db[peak_idx]:.2f} dBi at {freq_hz_g[peak_idx] / 1e9:.3f} GHz")
-            print("Full gain curve (GHz, dBi):")
-            for f, g in zip(freq_hz_g, gain_db):
-                print(f"  {f / 1e9:.3f}  {g:.2f}")
+
+    freq_hz_z, re_zin, im_zin = extract_zin(hfss)
+    print(f"\n=== HFSS Zin results ===")
+    print("Full Zin curve (GHz, Re(Zin) ohm, Im(Zin) ohm):")
+    for f, r, im in zip(freq_hz_z, re_zin, im_zin):
+        print(f"  {f / 1e9:.3f}  {r:.2f}  {im:.2f}")
+
+    freq_hz_g, gain_db = extract_gain(hfss)
+    print(f"\n=== HFSS Gain results (boresight) ===")
+    peak_idx = np.argmax(gain_db)
+    print(f"Peak realized gain: {gain_db[peak_idx]:.2f} dBi at {freq_hz_g[peak_idx] / 1e9:.3f} GHz")
+    print("Full gain curve (GHz, dBi):")
+    for f, g in zip(freq_hz_g, gain_db):
+        print(f"  {f / 1e9:.3f}  {g:.2f}")
 
     input("Press Enter to close AEDT...")
     hfss.release_desktop(close_projects=True, close_desktop=True)

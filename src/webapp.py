@@ -11,7 +11,7 @@ from src.sim.schema import DesignParams
 from src.sim.analytical_model import simulate
 
 try:
-    from src.sim.hfss_model import simulate_hfss
+    from src.sim.hfss_model import simulate_hfss, simulate_hfss_with_pattern
     HFSS_AVAILABLE = True
 except Exception:
     HFSS_AVAILABLE = False
@@ -341,6 +341,65 @@ def build_pattern_3d(L_m, W_m, freq_hz):
 
 
 # ---------------------------------------------------------------------------
+# Real HFSS far-field pattern plots (theta/phi/gain grid from
+# simulate_hfss_with_pattern) -- NOT the cavity-model approximation above.
+# ---------------------------------------------------------------------------
+def build_real_pattern_cuts_2d(pattern):
+    theta_deg = pattern["theta_deg"]
+    phi_deg = pattern["phi_deg"]
+    gain_db = pattern["gain_db"]  # shape (n_theta, n_phi)
+
+    phi0_idx = int(np.argmin(np.abs(phi_deg - 0)))
+    phi90_idx = int(np.argmin(np.abs(phi_deg - 90)))
+
+    e_cut = gain_db[:, phi0_idx]
+    h_cut = gain_db[:, phi90_idx]
+
+    floor = -30
+    e_plot = np.clip(e_cut, floor, None) - floor
+    h_plot = np.clip(h_cut, floor, None) - floor
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(r=e_plot, theta=theta_deg, mode="lines",
+                                   name="phi=0° (E-plane)", line=dict(color="#2d5f8a", width=3)))
+    fig.add_trace(go.Scatterpolar(r=h_plot, theta=theta_deg, mode="lines",
+                                   name="phi=90° (H-plane)", line=dict(color="#cf222e", width=3)))
+    fig.update_layout(
+        polar=dict(radialaxis=dict(showticklabels=False, ticks=""),
+                   angularaxis=dict(direction="clockwise")),
+        template="plotly_white", height=380, margin=dict(t=30),
+        legend=dict(orientation="h", y=-0.1),
+    )
+    return fig
+
+
+def build_real_pattern_3d(pattern):
+    theta_deg = pattern["theta_deg"]
+    phi_deg = pattern["phi_deg"]
+    gain_db = pattern["gain_db"]
+
+    theta_rad = np.radians(theta_deg)
+    phi_rad = np.radians(phi_deg)
+    theta_grid, phi_grid = np.meshgrid(theta_rad, phi_rad, indexing="ij")
+
+    floor = -20
+    gain_lin = np.clip(gain_db - floor, 0, None)
+
+    x = gain_lin * np.sin(theta_grid) * np.cos(phi_grid)
+    y = gain_lin * np.sin(theta_grid) * np.sin(phi_grid)
+    z = gain_lin * np.cos(theta_grid)
+
+    fig = go.Figure(data=[go.Surface(x=x, y=y, z=z, surfacecolor=gain_db,
+                                      colorscale="Viridis", showscale=True,
+                                      colorbar=dict(title="dBi"))])
+    fig.update_layout(
+        scene=dict(aspectmode="data", xaxis_title="", yaxis_title="", zaxis_title=""),
+        margin=dict(l=0, r=0, t=10, b=0), height=420,
+    )
+    return fig
+
+
+# ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
 with st.sidebar:
@@ -384,6 +443,7 @@ if run_btn:
     st.session_state["auto_orig_gain"] = gain_dbi
     st.session_state["auto_freq_ghz"] = freq_ghz
     st.session_state.pop("hfss_result", None)
+    st.session_state.pop("hfss_pattern", None)
 
 tab1, tab2, tab3 = st.tabs(["🧊 Design Workspace", "🔍 Raw Candidates", "🔬 HFSS Validation"])
 
@@ -541,7 +601,9 @@ with tab2:
                 st.json(cand)
 
 # ---------------------------------------------------------------------------
-# TAB 3 — real HFSS validation of the current workspace design
+# TAB 3 — real HFSS validation of the current workspace design, with the
+# option to watch it build and solve live in the AEDT GUI, plus a real
+# far-field radiation pattern pulled from the solved model.
 # ---------------------------------------------------------------------------
 with tab3:
     st.caption("Runs the **actual** HFSS full-wave simulation on the current workspace geometry "
@@ -561,17 +623,34 @@ with tab3:
                  f"h={hfss_design.h*1e3:.3f}mm, εr={hfss_design.eps_r:.2f}, y0={hfss_design.y0*1e3:.2f}mm")
         st.markdown('</div>', unsafe_allow_html=True)
 
-        st.warning("⏱️ Takes 5-10 minutes, uses a local AEDT license. Confirm no zombie "
-                   "`ansysedt.exe` process is already running first.")
+        watch_live = st.checkbox(
+            "👁️ Watch it build live in HFSS (opens the AEDT window — airbox, substrate, "
+            "ground, patch, feed, port, and far-field setup built and solved visibly)",
+            value=True,
+        )
+        if watch_live:
+            st.warning("⏱️ Takes approx. 10-15 minutes (full angular far-field sweep included), uses a "
+                       "local AEDT license, and **opens a visible AEDT window** on this machine. "
+                       "Confirm no zombie `ansysedt.exe` process is already running first.")
+        else:
+            st.warning("⏱️ Takes approx. 10-15 minutes, uses a local AEDT license, runs headless "
+                       "(no visible window). Confirm no zombie `ansysedt.exe` process is already running first.")
         confirm = st.checkbox("I understand this will take several minutes and uses local AEDT.")
         hfss_btn = st.button("🔬 Run HFSS Validation", disabled=not confirm, type="primary")
 
         if hfss_btn:
             hfss_freq_hz = np.linspace(freq_ghz * 0.8e9, freq_ghz * 1.2e9, 81)
+            spinner_text = ("Building and solving in the visible AEDT window — watch it appear "
+                             "on your screen (10-15 min)..." if watch_live else
+                             "Running HFSS full-wave simulation headless (10-15 min)...")
             try:
-                with st.spinner("Running HFSS full-wave simulation (5-10 min)..."):
-                    hfss_gt_new = simulate_hfss(hfss_design, hfss_freq_hz, non_graphical=True)
+                with st.spinner(spinner_text):
+                    hfss_gt_new, pattern_new = simulate_hfss_with_pattern(
+                        hfss_design, hfss_freq_hz, non_graphical=not watch_live,
+                        keep_open=watch_live,
+                    )
                 st.session_state["hfss_result"] = hfss_gt_new
+                st.session_state["hfss_pattern"] = pattern_new
                 st.session_state["hfss_design_used"] = hfss_design
                 st.session_state["hfss_target_freq_ghz"] = freq_ghz
                 st.success("HFSS simulation complete.")
@@ -580,6 +659,7 @@ with tab3:
 
         if "hfss_result" in st.session_state:
             hfss_gt = st.session_state["hfss_result"]
+            hfss_pattern = st.session_state.get("hfss_pattern")
             hfss_design_used = st.session_state["hfss_design_used"]
             hfss_target_freq_ghz = st.session_state["hfss_target_freq_ghz"]
             freq_err_pct = abs(hfss_gt.resonant_freq_hz - hfss_target_freq_ghz * 1e9) / (hfss_target_freq_ghz * 1e9) * 100
@@ -598,6 +678,7 @@ with tab3:
                     "peak_gain_dbi": hfss_gt.peak_gain_dbi,
                     "freq_hz array length": len(hfss_gt.freq_hz),
                     "s11_db array length": len(hfss_gt.s11_db),
+                    "pattern available": hfss_pattern is not None,
                 })
 
             vswr_fig = go.Figure()
@@ -621,3 +702,17 @@ with tab3:
                                 xaxis_title="GHz", yaxis_title="dB",
                                 template="plotly_white", height=420)
             st.plotly_chart(fig3, use_container_width=True)
+
+            st.markdown("#### 📡 Real HFSS Far-Field Radiation Pattern")
+            if hfss_pattern is not None:
+                st.caption("Actual full-wave far-field gain pattern pulled from HFSS (theta 0-180°, "
+                           "phi 0-360°) at the solved resonant frequency — not the cavity-model "
+                           "approximation used in the Design Workspace tab.")
+                rp1, rp2 = st.columns(2)
+                with rp1:
+                    st.plotly_chart(build_real_pattern_cuts_2d(hfss_pattern), use_container_width=True)
+                with rp2:
+                    st.plotly_chart(build_real_pattern_3d(hfss_pattern), use_container_width=True)
+            else:
+                st.warning("Far-field pattern extraction failed for this run (see console/log output). "
+                           f"Scalar peak gain is still valid: {hfss_gt.peak_gain_dbi:.2f} dBi at boresight.")
